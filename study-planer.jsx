@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
-import { Trash2, CheckCircle2, BookOpen, GraduationCap } from 'lucide-react';
+import { Trash2, CheckCircle2, BookOpen, GraduationCap, Eye, EyeOff } from 'lucide-react';
 
 const groupBy = (array, keyFn) => {
   return array.reduce((result, item) => {
@@ -78,6 +78,7 @@ const normalizeRequirements = (savedRequirements) => {
       id: requirement.id ? String(requirement.id) : `req-${Date.now()}-${index}`,
       title: requirement.title.trim(),
       requiredCredits: isValidCredits(requirement.requiredCredits) ? parseNumberInput(requirement.requiredCredits) : 6,
+      countTowardsTotal: requirement.countTowardsTotal !== false,
     }));
 };
 
@@ -353,14 +354,18 @@ export default function StudyPlaner() {
     previousRequirementPositionsRef.current = nextPositions;
   }, [requirements]);
 
-  const totalRequiredCredits = requirements.reduce((sum, requirement) => sum + requirement.requiredCredits, 0);
-  const totalEarnedCredits = orderedModules.filter((module) => module.status === 'Completed').reduce((sum, module) => sum + module.credits, 0);
-  const totalInProgressCredits = orderedModules.filter((module) => module.status === 'In Progress').reduce((sum, module) => sum + module.credits, 0);
-  const totalPlannedCredits = orderedModules.filter((module) => module.status === 'Planned').reduce((sum, module) => sum + module.credits, 0);
-  const totalEarnedPercentage = Math.min((totalEarnedCredits / totalRequiredCredits) * 100, 100);
-  const totalInProgressPercentage = Math.min((totalInProgressCredits / totalRequiredCredits) * 100, 100 - totalEarnedPercentage);
-  const totalPlannedPercentage = Math.min((totalPlannedCredits / totalRequiredCredits) * 100, 100 - totalEarnedPercentage - totalInProgressPercentage);
-  const gradedCompletedModules = orderedModules.filter((module) => module.status === 'Completed' && typeof module.grade === 'number' && !Number.isNaN(module.grade));
+  const includedRequirements = requirements.filter(req => req.countTowardsTotal !== false);
+  const includedContainers = new Set(includedRequirements.map(req => req.title));
+  const includedModules = orderedModules.filter(module => includedContainers.has(module.container));
+
+  const totalRequiredCredits = includedRequirements.reduce((sum, requirement) => sum + requirement.requiredCredits, 0);
+  const totalEarnedCredits = includedModules.filter((module) => module.status === 'Completed').reduce((sum, module) => sum + module.credits, 0);
+  const totalInProgressCredits = includedModules.filter((module) => module.status === 'In Progress').reduce((sum, module) => sum + module.credits, 0);
+  const totalPlannedCredits = includedModules.filter((module) => module.status === 'Planned').reduce((sum, module) => sum + module.credits, 0);
+  const totalEarnedPercentage = totalRequiredCredits > 0 ? Math.min((totalEarnedCredits / totalRequiredCredits) * 100, 100) : 0;
+  const totalInProgressPercentage = totalRequiredCredits > 0 ? Math.min((totalInProgressCredits / totalRequiredCredits) * 100, 100 - totalEarnedPercentage) : 0;
+  const totalPlannedPercentage = totalRequiredCredits > 0 ? Math.min((totalPlannedCredits / totalRequiredCredits) * 100, 100 - totalEarnedPercentage - totalInProgressPercentage) : 0;
+  const gradedCompletedModules = includedModules.filter((module) => module.status === 'Completed' && typeof module.grade === 'number' && !Number.isNaN(module.grade));
   const weightedGradeSum = gradedCompletedModules.reduce((sum, module) => sum + (module.grade * module.credits), 0);
   const gradedCredits = gradedCompletedModules.reduce((sum, module) => sum + module.credits, 0);
   const averageGrade = gradedCredits > 0 ? (weightedGradeSum / gradedCredits).toFixed(2) : null;
@@ -616,7 +621,7 @@ export default function StudyPlaner() {
       <div className="overall-progress-section">
         <div className="op-header">
           <h2>Degree Progress</h2>
-          <span className="fraction">{totalEarnedCredits} / {totalRequiredCredits} CP</span>
+          <span className="fraction">{totalEarnedCredits} / {totalRequiredCredits} ECTS</span>
         </div>
         <div className="op-header">
           <h2>Current Average</h2>
@@ -628,9 +633,9 @@ export default function StudyPlaner() {
           <div className="progress-fill planned" style={{ width: `${totalPlannedPercentage}%` }} />
         </div>
         <div className="op-legend">
-          <span><span className="dot earned" /> Completed ({totalEarnedCredits} CP)</span>
-          <span><span className="dot in-progress" /> In Progress ({totalInProgressCredits} CP)</span>
-          <span><span className="dot planned" /> Planned ({totalPlannedCredits} CP)</span>
+          <span><span className="dot earned" /> Completed ({totalEarnedCredits} ECTS)</span>
+          <span><span className="dot in-progress" /> In Progress ({totalInProgressCredits} ECTS)</span>
+          <span><span className="dot planned" /> Planned ({totalPlannedCredits} ECTS)</span>
         </div>
       </div>
 
@@ -711,7 +716,7 @@ export default function StudyPlaner() {
               }}
               onUpdateCredits={(newCredits) => {
                 if (!isValidCredits(newCredits)) {
-                  window.alert('Please enter valid required CP between 0.5 and 30.');
+                  window.alert('Please enter valid required ECTS between 0.5 and 30.');
                   return;
                 }
                 setRequirements((currentRequirements) => currentRequirements.map((currentRequirement) => (
@@ -731,6 +736,13 @@ export default function StudyPlaner() {
                   return;
                 }
                 setRequirements((currentRequirements) => currentRequirements.filter((currentRequirement) => currentRequirement.id !== requirement.id));
+              }}
+              onToggleCount={() => {
+                setRequirements((currentRequirements) => currentRequirements.map((currentRequirement) => (
+                  currentRequirement.id === requirement.id
+                    ? { ...currentRequirement, countTowardsTotal: currentRequirement.countTowardsTotal === false }
+                    : currentRequirement
+                )));
               }}
             />
           ))}
@@ -827,7 +839,7 @@ function SemesterColumn({
           >
             +
           </button>
-          <span className="credits-badge">{credits} CP</span>
+          <span className="credits-badge">{credits} ECTS</span>
         </div>
       </div>
       {canRemove && (
@@ -899,7 +911,7 @@ function SemesterColumn({
                   inputMode="decimal"
                   onSave={(newCredits) => onUpdateCredits(module.id, newCredits)}
                 >
-                  <span className="tag-credits">{module.credits} CP</span>
+                  <span className="tag-credits">{module.credits} ECTS</span>
                 </InlineEditable>
                 {module.status === 'Completed' && (
                   <InlineEditable
@@ -1029,8 +1041,10 @@ function ContainerAnalytics({
   onRename,
   onUpdateCredits,
   onDelete,
+  onToggleCount,
 }) {
-  const { title, requiredCredits } = requirement;
+  const { title, requiredCredits, countTowardsTotal } = requirement;
+  const isIncluded = countTowardsTotal !== false;
   const getInsertionIndexFromPointer = (event) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const midpoint = bounds.top + (bounds.height / 2);
@@ -1063,7 +1077,7 @@ function ContainerAnalytics({
       />
       <div
         data-requirement-id={requirement.id}
-        className={`analytics-card ${overflowCredits > 0 ? 'is-overfull' : ''} ${isDragging ? 'is-dragging' : ''}`}
+        className={`analytics-card ${overflowCredits > 0 ? 'is-overfull' : ''} ${isDragging ? 'is-dragging' : ''} ${!isIncluded ? 'is-excluded' : ''}`}
         draggable
         onDragStart={(e) => onDragStart(e, requirement.id)}
         onDragEnd={onDragEnd}
@@ -1083,8 +1097,16 @@ function ContainerAnalytics({
             <h3>{title}</h3>
           </InlineEditable>
           <div className="requirement-header-actions">
+            <button
+               type="button"
+               className={`requirement-toggle-btn ${isIncluded ? 'included' : 'excluded'}`}
+               onClick={onToggleCount}
+               title={isIncluded ? 'Included in total progress' : 'Excluded from total progress'}
+            >
+               {isIncluded ? <Eye size={15} /> : <EyeOff size={15} />}
+            </button>
             <InlineEditable className="requirement-credits-edit" value={String(requiredCredits)} inputMode="decimal" onSave={onUpdateCredits}>
-              <span className="fraction">{totalCredits} / {requiredCredits} CP</span>
+              <span className="fraction">{totalCredits} / {requiredCredits} ECTS</span>
             </InlineEditable>
             <button type="button" className="requirement-delete-btn" onClick={onDelete} title={`Delete ${title}`}>
               <Trash2 size={15} />
@@ -1102,7 +1124,7 @@ function ContainerAnalytics({
           <span><span className="dot planned" /> Planned ({plannedCredits})</span>
         </div>
         {overflowCredits > 0 && (
-          <div className="overflow-note">Over planned by {overflowCredits} CP</div>
+          <div className="overflow-note">Over planned by {overflowCredits} ECTS</div>
         )}
       </div>
     </div>
@@ -1160,7 +1182,7 @@ function ModuleModal({ onClose, onAdd, allSemesters, containers, initialSemester
           </div>
           <div className="form-group-row">
             <div className="form-group">
-              <label>Credits (CP)</label>
+              <label>Credits (ECTS)</label>
               <input
                 type="text"
                 inputMode="decimal"

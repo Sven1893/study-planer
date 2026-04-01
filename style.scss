@@ -687,6 +687,17 @@ button {
     box-shadow: 0 0 0 1px rgba(244, 114, 182, 0.08);
   }
   
+  &.is-excluded {
+    opacity: 0.65;
+    background: rgba(26, 31, 46, 0.3);
+    border-style: dashed;
+    
+    .progress-bar {
+      filter: grayscale(100%);
+      opacity: 0.5;
+    }
+  }
+  
   .ac-header {
     display: flex;
     justify-content: space-between;
@@ -713,11 +724,34 @@ button {
     gap: 0.5rem;
   }
 
+  .requirement-toggle-btn {
+    background: transparent;
+    color: var(--text-muted);
+    padding: 0.2rem;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+    }
+    
+    &.included {
+      color: var(--success);
+      &:hover { color: #34d399; }
+    }
+  }
+
   .requirement-delete-btn {
     background: transparent;
     color: var(--text-muted);
     padding: 0.2rem;
     border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
     &:hover {
       color: var(--danger);
