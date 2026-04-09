@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import { Trash2, CheckCircle2, BookOpen, GraduationCap, Eye, EyeOff } from 'lucide-react';
+import { supabase } from './supabaseClient';
 
 const groupBy = (array, keyFn) => {
   return array.reduce((result, item) => {
@@ -222,6 +223,12 @@ export default function StudyPlaner() {
   const [dropTarget, setDropTarget] = useState(null);
   const [draggedRequirementId, setDraggedRequirementId] = useState(null);
   const [requirementDropTarget, setRequirementDropTarget] = useState(null);
+  const [session, setSession] = useState(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
+  const [initialSyncDone, setInitialSyncDone] = useState(false);
   const fileInputRef = useRef(null);
   const previousModulePositionsRef = useRef(new Map());
   const previousRequirementPositionsRef = useRef(new Map());
@@ -546,6 +553,32 @@ export default function StudyPlaner() {
     }
   };
 
+  const handleSendMagicLink = async (event) => {
+    event.preventDefault();
+    if (!authEmail) {
+      return;
+    }
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: authEmail,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+      if (error) {
+        throw error;
+      }
+      window.alert('Check deine E-Mails fuer den Login-Link.');
+    } catch (error) {
+      window.alert(error.message ?? 'Login fehlgeschlagen.');
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setAuthEmail('');
+  };
+
   useEffect(() => {
     const onKeyDown = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
@@ -566,6 +599,114 @@ export default function StudyPlaner() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) {
+        setSession(data.session ?? null);
+      }
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setInitialSyncDone(false);
+      setSyncError(null);
+      setIsSyncing(false);
+      return;
+    }
+
+    let canceled = false;
+    setSyncError(null);
+    setIsSyncing(true);
+
+    (async () => {
+      const { data, error } = await supabase
+        .from('plans')
+        .select('data')
+        .eq('owner', session.user.id)
+        .single();
+
+      if (canceled) {
+        return;
+      }
+
+      if (error && error.code !== 'PGRST116') {
+        console.error('Supabase load failed', error);
+        setSyncError('Synchronisation fehlgeschlagen. Aenderungen bleiben lokal erhalten.');
+      }
+
+      if (!error && data?.data) {
+        const payload = data.data;
+        const nextRequirements = normalizeRequirements(payload.requirements);
+        const nextSemesters = normalizeSemesterList(payload.semesters);
+        const nextModules = normalizeModules(
+          payload.modules ?? [],
+          nextSemesters,
+          nextRequirements.map((requirement) => requirement.title),
+        );
+        setPlannerTitle(typeof payload.plannerTitle === 'string' && payload.plannerTitle.trim() ? payload.plannerTitle.trim() : DEFAULT_TITLE);
+        setRequirements(nextRequirements);
+        setSemesters(nextSemesters);
+        setModules(nextModules);
+      }
+
+      setInitialSyncDone(true);
+      setIsSyncing(false);
+      setLastSyncedAt(new Date().toISOString());
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!session || !initialSyncDone) {
+      return;
+    }
+
+    const payload = {
+      plannerTitle,
+      semesters,
+      requirements,
+      modules,
+    };
+
+    const timeoutId = setTimeout(async () => {
+      setIsSyncing(true);
+      setSyncError(null);
+      const { error } = await supabase
+        .from('plans')
+        .upsert({
+          owner: session.user.id,
+          data: payload,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'owner' });
+
+      setIsSyncing(false);
+      if (error) {
+        console.error('Supabase save failed', error);
+        setSyncError('Speichern fehlgeschlagen. Aenderungen bleiben lokal erhalten.');
+        return;
+      }
+      setLastSyncedAt(new Date().toISOString());
+    }, 800);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [plannerTitle, semesters, requirements, modules, session, initialSyncDone]);
 
   const startDraggingRequirement = (event, requirementId) => {
     event.dataTransfer.effectAllowed = 'move';
@@ -617,6 +758,42 @@ export default function StudyPlaner() {
           <button type="button" className="secondary-btn" onClick={handleExport}>Export JSON</button>
         </div>
       </header>
+
+      <section className="auth-panel">
+        {session ? (
+          <div className="auth-panel-signed-in">
+            <div className="auth-panel-row">
+              <span>Angemeldet als {session.user?.email ?? session.user?.id}</span>
+              <button type="button" className="secondary-btn" onClick={handleLogout}>Logout</button>
+            </div>
+            <div className="auth-panel-row">
+              <span>
+                {isSyncing
+                  ? 'Synchronisiere mit Supabase ...'
+                  : lastSyncedAt
+                    ? `Zuletzt synchronisiert: ${new Date(lastSyncedAt).toLocaleTimeString()}`
+                    : 'Cloud-Sync noch nicht gestartet'}
+              </span>
+              {syncError && <span className="sync-error">{syncError}</span>}
+            </div>
+          </div>
+        ) : (
+          <form className="auth-panel-form" onSubmit={handleSendMagicLink}>
+            <label className="auth-panel-label">
+              Login-Link per E-Mail
+              <input
+                type="email"
+                value={authEmail}
+                onChange={(event) => setAuthEmail(event.target.value)}
+                placeholder="name@example.com"
+                required
+              />
+            </label>
+            <p className="auth-panel-hint">Wir senden dir einen Magic Link von Supabase. Öffne ihn auf diesem Gerät, um deinen Plan zu laden.</p>
+            <button type="submit" className="secondary-btn">Link senden</button>
+          </form>
+        )}
+      </section>
 
       <div className="overall-progress-section">
         <div className="op-header">
